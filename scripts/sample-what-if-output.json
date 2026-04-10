@@ -1,0 +1,85 @@
+{
+  "properties": {
+    "changes": [
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.OperationalInsights/workspaces/log-costpipe-dev",
+        "resourceType": "Microsoft.OperationalInsights/workspaces",
+        "changeType": "Create",
+        "after": {
+          "sku": { "name": "PerGB2018" },
+          "properties": { "retentionInDays": 30 }
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Insights/components/appi-costpipe-dev",
+        "resourceType": "Microsoft.Insights/components",
+        "changeType": "Create",
+        "after": {
+          "properties": { "Application_Type": "web" }
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Storage/storageAccounts/stcostpipeabc123",
+        "resourceType": "Microsoft.Storage/storageAccounts",
+        "changeType": "Create",
+        "after": {
+          "sku": { "name": "Standard_LRS" },
+          "kind": "StorageV2"
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Storage/storageAccounts/stfunccostpipeabc123",
+        "resourceType": "Microsoft.Storage/storageAccounts",
+        "changeType": "Create",
+        "after": {
+          "sku": { "name": "Standard_LRS" },
+          "kind": "StorageV2"
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Web/serverfarms/asp-costpipe-dev",
+        "resourceType": "Microsoft.Web/serverfarms",
+        "changeType": "Create",
+        "after": {
+          "sku": { "name": "B1" }
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Web/sites/app-costpipe-dev",
+        "resourceType": "Microsoft.Web/sites",
+        "changeType": "Create",
+        "after": {
+          "kind": "app,linux"
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Web/sites/func-costpipe-dev",
+        "resourceType": "Microsoft.Web/sites",
+        "changeType": "Create",
+        "after": {
+          "kind": "functionapp,linux"
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.AppConfiguration/configurationStores/appcs-costpipe-dev",
+        "resourceType": "Microsoft.AppConfiguration/configurationStores",
+        "changeType": "Create",
+        "after": {
+          "sku": { "name": "free" }
+        }
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Authorization/roleAssignments/guid1",
+        "resourceType": "Microsoft.Authorization/roleAssignments",
+        "changeType": "Create",
+        "after": {}
+      },
+      {
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-costpipe-dev/providers/Microsoft.Authorization/roleAssignments/guid2",
+        "resourceType": "Microsoft.Authorization/roleAssignments",
+        "changeType": "Create",
+        "after": {}
+      }
+    ]
+  }
+}
