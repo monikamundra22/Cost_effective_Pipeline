@@ -21,53 +21,78 @@ import os
 import sys
 from typing import Any
 
-# ─── Approximate Azure retail prices (USD / month) ──────────────────────────
-# These are *rough estimates* – the real pipeline can call the Azure Retail
-# Prices API for exact numbers. This lookup keeps the script dependency-free.
+import requests
 
-PRICING: dict[str, dict[str, float]] = {
-    # App Service Plans  (Linux, monthly estimate)
-    "Microsoft.Web/serverfarms": {
-        "F1": 0.00,
-        "B1": 13.14,
-        "B2": 26.28,
-        "S1": 69.35,
-        "S2": 138.70,
-        "P1v3": 138.70,
-        "P2v3": 277.40,
-        "_default": 69.35,
-    },
-    # Web Apps & Function Apps – cost is driven by the plan; the site
-    # resource itself is free, but we tag a fixed ops overhead.
-    "Microsoft.Web/sites": {
-        "_default": 0.00,
-    },
-    # Storage Accounts
-    "Microsoft.Storage/storageAccounts": {
-        "Standard_LRS": 21.84,
-        "Standard_GRS": 43.69,
-        "Standard_ZRS": 27.30,
-        "_default": 21.84,
-    },
-    # App Configuration
-    "Microsoft.AppConfiguration/configurationStores": {
-        "free": 0.00,
-        "standard": 36.50,
-        "_default": 0.00,
-    },
-    # Application Insights (per-GB ingestion – assume 5 GB / month)
-    "Microsoft.Insights/components": {
-        "_default": 14.27,
-    },
-    # Log Analytics Workspace (per-GB – assume 5 GB / month)
-    "Microsoft.OperationalInsights/workspaces": {
-        "_default": 12.41,
-    },
-    # Role Assignments – no cost
-    "Microsoft.Authorization/roleAssignments": {
-        "_default": 0.00,
-    },
+# ─── Azure Retail Prices API ─────────────────────────────────────────────────
+# Maps ARM resource types to the (serviceName, skuName) used by the API.
+# When a SKU isn't found via the API, the static fallback is used.
+
+RESOURCE_TYPE_TO_SERVICE: dict[str, str] = {
+    "Microsoft.Web/serverfarms": "Azure App Service",
+    "Microsoft.Web/sites": "Azure App Service",
+    "Microsoft.Storage/storageAccounts": "Storage",
+    "Microsoft.AppConfiguration/configurationStores": "Azure App Configuration",
+    "Microsoft.Insights/components": "Application Insights",
+    "Microsoft.OperationalInsights/workspaces": "Log Analytics",
 }
+
+# Static fallback prices (USD / month) used when the API returns no results
+FALLBACK_PRICING: dict[str, dict[str, float]] = {
+    "Microsoft.Web/serverfarms": {
+        "F1": 0.00, "B1": 13.14, "B2": 26.28, "S1": 69.35,
+        "S2": 138.70, "P1v3": 138.70, "P2v3": 277.40, "_default": 69.35,
+    },
+    "Microsoft.Web/sites": {"_default": 0.00},
+    "Microsoft.Storage/storageAccounts": {
+        "Standard_LRS": 21.84, "Standard_GRS": 43.69,
+        "Standard_ZRS": 27.30, "_default": 21.84,
+    },
+    "Microsoft.AppConfiguration/configurationStores": {
+        "free": 0.00, "standard": 36.50, "_default": 0.00,
+    },
+    "Microsoft.Insights/components": {"_default": 14.27},
+    "Microsoft.OperationalInsights/workspaces": {"_default": 12.41},
+    "Microsoft.Authorization/roleAssignments": {"_default": 0.00},
+}
+
+# Cache to avoid repeated API calls for the same (service, sku, region)
+_price_cache: dict[tuple[str, str, str], float] = {}
+
+
+def get_azure_price(service_name: str, sku_name: str, region: str = "eastus") -> float | None:
+    """Fetch the monthly retail price from the Azure Retail Prices API."""
+    cache_key = (service_name, sku_name, region)
+    if cache_key in _price_cache:
+        return _price_cache[cache_key]
+
+    url = "https://prices.azure.com/api/retail/prices"
+    params = {
+        "$filter": (
+            f"serviceName eq '{service_name}' and skuName eq '{sku_name}' "
+            f"and armRegionName eq '{region}' and priceType eq 'Consumption'"
+        )
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        items = resp.json().get("Items", [])
+        if items:
+            # Use retailPrice and convert hourly → monthly (730 hrs)
+            hourly = items[0]["retailPrice"]
+            unit = items[0].get("unitOfMeasure", "")
+            if "Hour" in unit:
+                price = hourly * 730
+            elif "Month" in unit:
+                price = hourly
+            elif "GB" in unit:
+                price = hourly * 5  # assume 5 GB/month for log/insights
+            else:
+                price = hourly * 730
+            _price_cache[cache_key] = price
+            return price
+    except requests.RequestException as e:
+        print(f"⚠️  API call failed for {service_name}/{sku_name}: {e}", file=sys.stderr)
+    return None
 
 
 # ─── Change-type labels ─────────────────────────────────────────────────────
@@ -122,17 +147,27 @@ def resolve_sku(change: dict[str, Any]) -> str:
     return "_default"
 
 
-def estimate_resource_cost(resource_type: str, sku: str, change_type: str) -> float:
-    """Return estimated monthly cost delta for a single resource change."""
-    prices = PRICING.get(resource_type, {})
-    unit_cost = prices.get(sku, prices.get("_default", 0.0))
+def estimate_resource_cost(resource_type: str, sku: str, change_type: str, region: str = "eastus") -> float:
+    """Return estimated monthly cost delta for a single resource change.
+
+    Tries the Azure Retail Prices API first, falls back to static pricing.
+    """
+    # Try live API lookup
+    service_name = RESOURCE_TYPE_TO_SERVICE.get(resource_type)
+    unit_cost = None
+    if service_name and sku != "_default":
+        unit_cost = get_azure_price(service_name, sku, region)
+
+    # Fall back to static pricing
+    if unit_cost is None:
+        fallback = FALLBACK_PRICING.get(resource_type, {})
+        unit_cost = fallback.get(sku, fallback.get("_default", 0.0))
 
     if change_type == "Create":
         return unit_cost
     elif change_type == "Delete":
         return -unit_cost
     else:
-        # Modify, NoChange, etc. – no *new* cost delta
         return 0.0
 
 

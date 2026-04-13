@@ -132,6 +132,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Install Python dependencies
+        run: pip install requests
+
       # ── Estimate Costs ───────────────────────────────────────────────────
       - name: Estimate infrastructure costs
         id: cost
