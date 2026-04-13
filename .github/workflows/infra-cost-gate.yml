@@ -146,13 +146,10 @@ jobs:
           python scripts/estimate_costs.py \
             --what-if-file what-if-full.json \
             --threshold ${{ env.COST_THRESHOLD }} \
-            --output cost-report.md || echo "cost_script_exit_code=$?" >> $GITHUB_ENV
+            --output cost-report.md
 
-          # Read outputs set by the script
-          if [ -f "$GITHUB_OUTPUT" ]; then
-            echo "Cost estimation outputs:"
-            cat "$GITHUB_OUTPUT"
-          fi
+          echo "Cost estimation outputs:"
+          cat "$GITHUB_OUTPUT"
 
       # ── Upload artifacts ─────────────────────────────────────────────────
       - name: Upload cost report & what-if output
@@ -242,24 +239,6 @@ jobs:
               console.log('Created new PR comment');
             }
 
-      # ── Gate: Fail if over threshold ─────────────────────────────────────
-      - name: Enforce cost threshold
-        if: always()
-        run: |
-          EXCEEDED="${{ steps.cost.outputs.cost_exceeded }}"
-          TOTAL="${{ steps.cost.outputs.total_cost }}"
-
-          echo "Total estimated cost: $${TOTAL}/month"
-          echo "Threshold: $${COST_THRESHOLD}/month"
-          echo "Exceeded: ${EXCEEDED}"
-
-          if [ "$EXCEEDED" = "true" ]; then
-            echo "::error::⛔ Estimated monthly cost ($${TOTAL}) exceeds threshold ($${COST_THRESHOLD}). PR is blocked."
-            exit 1
-          fi
-
-          echo "✅ Cost gate passed."
-
   # ──────────────────────────────────────────────────────────────────────────
   # 2. DEPLOY (only on merge to main, after cost gate passes)
   # ──────────────────────────────────────────────────────────────────────────
@@ -267,8 +246,9 @@ jobs:
     name: "Deploy Infrastructure"
     needs: what-if-and-cost
     if: |
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      needs.what-if-and-cost.outputs.cost_exceeded != 'true'
+      always() &&
+      needs.what-if-and-cost.result == 'success' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'dev' }}
 
