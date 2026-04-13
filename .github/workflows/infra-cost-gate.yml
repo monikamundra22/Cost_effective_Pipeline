@@ -80,10 +80,14 @@ jobs:
       # ── Checkout ─────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       # ── Azure Login (OIDC – federated credentials, no secrets stored) ──
       - name: Login to Azure
         uses: azure/login@v2
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -154,6 +158,8 @@ jobs:
       - name: Upload cost report & what-if output
         if: always()
         uses: actions/upload-artifact@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           name: infra-cost-report
           path: |
@@ -165,6 +171,8 @@ jobs:
       - name: Post cost report to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -267,9 +275,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       - name: Login to Azure
         uses: azure/login@v2
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
