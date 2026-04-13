@@ -231,31 +231,6 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2023-03-01' =
   }
 }
 
-// ─── Role Assignments: Grant apps read access to App Configuration ─────────
-
-// App Configuration Data Reader role
-var appConfigDataReaderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '516239f1-63e1-4d78-a4de-a74fb236a071')
-
-resource webAppConfigRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(appConfig.id, webApp.id, appConfigDataReaderRole)
-  scope: appConfig
-  properties: {
-    roleDefinitionId: appConfigDataReaderRole
-    principalId: webApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource funcAppConfigRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(appConfig.id, functionApp.id, appConfigDataReaderRole)
-  scope: appConfig
-  properties: {
-    roleDefinitionId: appConfigDataReaderRole
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // ─── Outputs ────────────────────────────────────────────────────────────────
 
 output webAppName string = webApp.name
