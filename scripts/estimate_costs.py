@@ -227,7 +227,11 @@ def build_report(changes: list[dict[str, Any]], threshold: float) -> tuple[str, 
                 f"threshold (${threshold:,.2f})."
             )
     else:
-        lines.append("> ℹ️ No cost threshold configured – report is informational only.")
+        lines.append(
+            f"> ⛔ **BLOCKED** – Threshold is $0.00 (zero tolerance). "
+            f"Estimated cost (${total_delta:,.2f}) exceeds threshold. "
+            f"Set a threshold > 0 to allow deployment."
+        )
 
     lines.append("")
     lines.append("---")
@@ -276,10 +280,18 @@ def main() -> None:
     if output_file:
         with open(output_file, "a", encoding="utf-8") as fh:
             fh.write(f"total_cost={total:.2f}\n")
-            blocked = "true" if (args.threshold > 0 and total > args.threshold) else "false"
+            if args.threshold == 0 and total > 0:
+                blocked = "true"
+            elif args.threshold > 0 and total > args.threshold:
+                blocked = "true"
+            else:
+                blocked = "false"
             fh.write(f"cost_exceeded={blocked}\n")
 
-    # Exit with failure if over threshold (to block the PR)
+    # Exit with failure if over threshold or threshold is 0 (block all)
+    if args.threshold == 0 and total > 0:
+        print(f"⛔ Threshold is $0 (zero tolerance). Deployment blocked. Cost: ${total:,.2f}")
+        sys.exit(1)
     if args.threshold > 0 and total > args.threshold:
         print(f"⛔ Cost threshold exceeded! ${total:,.2f} > ${args.threshold:,.2f}")
         sys.exit(1)

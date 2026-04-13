@@ -267,8 +267,8 @@ jobs:
     name: "Deploy Infrastructure"
     needs: what-if-and-cost
     if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch')
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.what-if-and-cost.outputs.cost_exceeded != 'true'
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'dev' }}
 
