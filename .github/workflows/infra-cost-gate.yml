@@ -263,7 +263,6 @@ jobs:
     name: "Deploy Infrastructure"
     needs: what-if-and-cost
     if: |
-      always() &&
       needs.what-if-and-cost.result == 'success' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
