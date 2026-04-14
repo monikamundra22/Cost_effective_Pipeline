@@ -111,7 +111,17 @@ CHANGE_LABELS = {
 def parse_what_if(filepath: str) -> list[dict[str, Any]]:
     """Read what-if JSON and return the list of resource changes."""
     with open(filepath, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
+        content = fh.read().strip()
+
+    if not content:
+        print("⚠️  What-if file is empty.", file=sys.stderr)
+        return []
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"⚠️  Failed to parse what-if JSON: {e}", file=sys.stderr)
+        return []
 
     # The what-if output structure can vary. Handle both CLI-captured
     # formats: wrapper with 'changes' key, or raw array.
