@@ -1,0 +1,172 @@
+# ============================================================================
+# vm-apim-cost-gate.yml – VM & APIM Cost Estimation Pipeline
+# ============================================================================
+#
+# Standalone pipeline that estimates Azure VM and API Management costs
+# using the Azure Retail Prices API.
+#
+# Inputs:
+#   - vm_size:        Azure VM size (e.g. Standard_B2s)
+#   - vm_os:          linux or windows
+#   - apim_sku:       APIM tier (Developer, Basic, Standard, Premium, etc.)
+#   - apim_units:     Number of APIM scale units
+#   - region:         Azure region
+#   - cost_threshold: Monthly USD limit — pipeline errors if exceeded
+# ============================================================================
+
+name: "VM & APIM – Cost Estimate"
+
+on:
+  workflow_dispatch:
+    inputs:
+      vm_size:
+        description: "Azure VM size"
+        required: true
+        default: "Standard_B2s"
+        type: choice
+        options:
+          - Standard_B1s
+          - Standard_B2s
+          - Standard_B2ms
+          - Standard_B4ms
+          - Standard_D2s_v3
+          - Standard_D4s_v3
+          - Standard_D2s_v5
+          - Standard_D4s_v5
+          - Standard_D2as_v5
+          - Standard_E2s_v3
+          - Standard_F2s_v2
+      vm_os:
+        description: "VM operating system"
+        required: true
+        default: "linux"
+        type: choice
+        options:
+          - linux
+          - windows
+      apim_sku:
+        description: "API Management tier"
+        required: true
+        default: "Developer"
+        type: choice
+        options:
+          - Consumption
+          - Developer
+          - Basic
+          - Standard
+          - Premium
+          - BasicV2
+          - StandardV2
+      apim_units:
+        description: "Number of APIM scale units"
+        required: false
+        default: "1"
+      region:
+        description: "Azure region"
+        required: true
+        default: "eastus"
+        type: choice
+        options:
+          - eastus
+          - eastus2
+          - westus
+          - westus2
+          - westus3
+          - centralus
+          - northeurope
+          - westeurope
+          - uksouth
+          - southeastasia
+      cost_threshold:
+        description: "Monthly cost threshold (USD). 0 = block all."
+        required: false
+        default: "500"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. COST ESTIMATION
+  # ──────────────────────────────────────────────────────────────────────────
+  estimate-costs:
+    name: "Estimate VM & APIM Costs"
+    runs-on: ubuntu-latest
+
+    outputs:
+      total_cost: ${{ steps.cost.outputs.total_cost }}
+      cost_exceeded: ${{ steps.cost.outputs.cost_exceeded }}
+      vm_cost: ${{ steps.cost.outputs.vm_cost }}
+      apim_cost: ${{ steps.cost.outputs.apim_cost }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Estimate costs from Azure Pricing API
+        id: cost
+        run: |
+          python scripts/estimate_vm_apim_costs.py \
+            --vm-size "${{ inputs.vm_size }}" \
+            --vm-os "${{ inputs.vm_os }}" \
+            --apim-sku "${{ inputs.apim_sku }}" \
+            --apim-units "${{ inputs.apim_units }}" \
+            --region "${{ inputs.region }}" \
+            --threshold "${{ inputs.cost_threshold }}" \
+            --output vm-apim-cost-report.md
+
+      - name: Upload cost report
+        if: always()
+        uses: actions/upload-artifact@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        with:
+          name: vm-apim-cost-report
+          path: vm-apim-cost-report.md
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. DEPLOY – only runs when cost check passes
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: "Deploy VM & APIM"
+    needs: estimate-costs
+    if: |
+      always() &&
+      needs.estimate-costs.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Cost gate passed
+        run: |
+          echo "✅ Cost check passed!"
+          echo "   VM cost:   $${{ needs.estimate-costs.outputs.vm_cost }}"
+          echo "   APIM cost: $${{ needs.estimate-costs.outputs.apim_cost }}"
+          echo "   Total:     $${{ needs.estimate-costs.outputs.total_cost }}"
+          echo ""
+          echo "🚀 Proceeding with deployment..."
+
+      # Add your actual deployment steps below (Azure Login, az deployment, etc.)
+      - name: Deploy (placeholder)
+        run: |
+          echo "ℹ️  Add your azure/login and az deployment steps here."
+          echo "    VM:   ${{ inputs.vm_size }} (${{ inputs.vm_os }})"
+          echo "    APIM: ${{ inputs.apim_sku }} (${{ inputs.apim_units }} units)"
+          echo "    Region: ${{ inputs.region }}"
