@@ -120,13 +120,25 @@ jobs:
             cat what-if-errors.log
           fi
 
-          # Validate the JSON file is not empty
-          if [ ! -s what-if-full.json ]; then
-            echo "⚠️ what-if-full.json is empty, using sample data"
+          # Validate the JSON has actual change data
+          HAS_CHANGES=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('what-if-full.json'))
+    changes = data.get('properties', {}).get('changes', data.get('changes', []))
+    if isinstance(data, list): changes = data
+    print('yes' if changes else 'no')
+except: print('no')
+" 2>/dev/null)
+
+          if [ "$HAS_CHANGES" != "yes" ]; then
+            echo "⚠️ No valid what-if changes found, using sample data for cost estimation"
             cp scripts/sample-what-if-output.json what-if-full.json
           fi
 
           echo "📋 What-if output saved."
+          echo "📄 Contents of what-if-full.json:"
+          head -50 what-if-full.json
 
           # Save human-readable summary for the PR comment
           az deployment group what-if \
@@ -245,7 +257,7 @@ jobs:
             }
 
   # ──────────────────────────────────────────────────────────────────────────
-  # 2. DEPLOY (only on merge to main, after cost gate passes)
+  # 2. DEPLOY – only runs when cost check passes
   # ──────────────────────────────────────────────────────────────────────────
   deploy:
     name: "Deploy Infrastructure"

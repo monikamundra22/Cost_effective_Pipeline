@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-estimate_costs.py – Parse Azure ARM what-if output and estimate monthly costs.
+estimate_costs.py – Parse Azure ARM what-if output and estimate monthly costs
+using the Azure Retail Prices API (https://prices.azure.com).
 
 This script:
   1. Reads the what-if JSON output from `az deployment group what-if`
-  2. Maps each resource type + SKU to an approximate monthly cost (USD)
+  2. Queries the Azure Retail Prices API for live pricing per resource
   3. Produces a Markdown summary suitable for posting on a GitHub PR
   4. Exits with code 1 if total cost exceeds the configured threshold
 
@@ -24,75 +25,172 @@ from typing import Any
 import requests
 
 # ─── Azure Retail Prices API ─────────────────────────────────────────────────
-# Maps ARM resource types to the (serviceName, skuName) used by the API.
-# When a SKU isn't found via the API, the static fallback is used.
 
-RESOURCE_TYPE_TO_SERVICE: dict[str, str] = {
-    "Microsoft.Web/serverfarms": "Azure App Service",
-    "Microsoft.Web/sites": "Azure App Service",
-    "Microsoft.Storage/storageAccounts": "Storage",
-    "Microsoft.AppConfiguration/configurationStores": "Azure App Configuration",
-    "Microsoft.Insights/components": "Application Insights",
-    "Microsoft.OperationalInsights/workspaces": "Log Analytics",
+API_URL = "https://prices.azure.com/api/retail/prices"
+_query_cache: dict[str, list[dict]] = {}
+
+# ARM SKU → API skuName translation for Storage Accounts
+_STORAGE_SKU_MAP: dict[str, str] = {
+    "Standard_LRS": "Hot LRS",
+    "Standard_GRS": "Hot GRS",
+    "Standard_ZRS": "Hot ZRS",
+    "Standard_RAGRS": "Hot RA-GRS",
+    "Standard_RAGZRS": "Hot RA-GZRS",
+    "Standard_GZRS": "Hot GZRS",
+    "Premium_LRS": "Premium LRS",
+    "Premium_ZRS": "Premium ZRS",
 }
 
-# Static fallback prices (USD / month) used when the API returns no results
-FALLBACK_PRICING: dict[str, dict[str, float]] = {
-    "Microsoft.Web/serverfarms": {
-        "F1": 0.00, "B1": 13.14, "B2": 26.28, "S1": 69.35,
-        "S2": 138.70, "P1v3": 138.70, "P2v3": 277.40, "_default": 69.35,
-    },
-    "Microsoft.Web/sites": {"_default": 0.00},
-    "Microsoft.Storage/storageAccounts": {
-        "Standard_LRS": 21.84, "Standard_GRS": 43.69,
-        "Standard_ZRS": 27.30, "_default": 21.84,
-    },
-    "Microsoft.AppConfiguration/configurationStores": {
-        "free": 0.00, "standard": 36.50, "_default": 0.00,
-    },
-    "Microsoft.Insights/components": {"_default": 14.27},
-    "Microsoft.OperationalInsights/workspaces": {"_default": 12.41},
-    "Microsoft.Authorization/roleAssignments": {"_default": 0.00},
-}
 
-# Cache to avoid repeated API calls for the same (service, sku, region)
-_price_cache: dict[tuple[str, str, str], float] = {}
+def _query_api(
+    service_name: str,
+    region: str,
+    sku_name: str | None = None,
+    product_name: str | None = None,
+) -> list[dict]:
+    """Query the Azure Retail Prices API with caching."""
+    parts = [
+        f"serviceName eq '{service_name}'",
+        f"armRegionName eq '{region}'",
+        "priceType eq 'Consumption'",
+        "isPrimaryMeterRegion eq true",
+    ]
+    if sku_name:
+        parts.append(f"skuName eq '{sku_name}'")
+    if product_name:
+        parts.append(f"productName eq '{product_name}'")
 
+    filt = " and ".join(parts)
+    if filt in _query_cache:
+        return _query_cache[filt]
 
-def get_azure_price(service_name: str, sku_name: str, region: str = "eastus") -> float | None:
-    """Fetch the monthly retail price from the Azure Retail Prices API."""
-    cache_key = (service_name, sku_name, region)
-    if cache_key in _price_cache:
-        return _price_cache[cache_key]
-
-    url = "https://prices.azure.com/api/retail/prices"
-    params = {
-        "$filter": (
-            f"serviceName eq '{service_name}' and skuName eq '{sku_name}' "
-            f"and armRegionName eq '{region}' and priceType eq 'Consumption'"
-        )
-    }
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(API_URL, params={"$filter": filt, "$top": "100"}, timeout=15)
         resp.raise_for_status()
         items = resp.json().get("Items", [])
-        if items:
-            # Use retailPrice and convert hourly → monthly (730 hrs)
-            hourly = items[0]["retailPrice"]
-            unit = items[0].get("unitOfMeasure", "")
-            if "Hour" in unit:
-                price = hourly * 730
-            elif "Month" in unit:
-                price = hourly
-            elif "GB" in unit:
-                price = hourly * 5  # assume 5 GB/month for log/insights
-            else:
-                price = hourly * 730
-            _price_cache[cache_key] = price
-            return price
-    except requests.RequestException as e:
-        print(f"⚠️  API call failed for {service_name}/{sku_name}: {e}", file=sys.stderr)
-    return None
+    except requests.RequestException as exc:
+        print(f"⚠️  API error ({service_name}/{sku_name}): {exc}", file=sys.stderr)
+        items = []
+
+    _query_cache[filt] = items
+    return items
+
+
+def _pick_item(
+    items: list[dict],
+    meter_hint: str | None = None,
+    unit_hint: str | None = None,
+) -> dict | None:
+    """Select the best-matching meter from API results."""
+    if not items:
+        return None
+    candidates = items
+
+    if meter_hint:
+        flt = [i for i in candidates if meter_hint.lower() in i.get("meterName", "").lower()]
+        if flt:
+            candidates = flt
+
+    if unit_hint:
+        flt = [i for i in candidates if unit_hint.lower() in i.get("unitOfMeasure", "").lower()]
+        if flt:
+            candidates = flt
+
+    # Prefer base-tier pricing (tierMinimumUnits == 0)
+    base = [i for i in candidates if i.get("tierMinimumUnits", 0) == 0]
+    if base:
+        candidates = base
+
+    # Prefer non-zero prices
+    non_zero = [i for i in candidates if i.get("retailPrice", 0) > 0]
+    if non_zero:
+        candidates = non_zero
+
+    return candidates[0] if candidates else None
+
+
+# ─── Per-resource-type pricing functions ─────────────────────────────────────
+# Each returns (monthly_cost, source_description).
+
+def _price_app_service_plan(sku: str, region: str) -> tuple[float, str]:
+    """App Service Plan – hourly rate × 730 hrs/month."""
+    if sku in ("_default", ""):
+        return 0.0, "No SKU detected"
+    items = _query_api("Azure App Service", region, sku_name=sku)
+    item = _pick_item(items, unit_hint="Hour")
+    if item:
+        monthly = item["retailPrice"] * 730
+        return monthly, f"API: ${item['retailPrice']:.4f}/hr × 730 hrs"
+    return 0.0, f"No API result for SKU '{sku}'"
+
+
+def _price_web_site(_sku: str, _region: str) -> tuple[float, str]:
+    """Web Apps are free – cost is on the App Service Plan."""
+    return 0.0, "Included in App Service Plan"
+
+
+def _price_storage(sku: str, region: str) -> tuple[float, str]:
+    """Storage Account – per-GB data-stored rate × assumed 100 GB."""
+    api_sku = _STORAGE_SKU_MAP.get(sku, "Hot LRS")
+    items = _query_api("Storage", region, sku_name=api_sku, product_name="Blob Storage")
+    item = _pick_item(items, meter_hint="Data Stored", unit_hint="GB/Month")
+    assumed_gb = 100
+    if item:
+        monthly = item["retailPrice"] * assumed_gb
+        return monthly, f"API: ${item['retailPrice']:.4f}/GB × {assumed_gb} GB"
+    return 0.0, f"No API result for '{sku}' (→ '{api_sku}')"
+
+
+def _price_app_config(sku: str, region: str) -> tuple[float, str]:
+    """App Configuration – Free tier ($0) or daily instance rate × 30."""
+    if sku.lower() in ("free", "_default", ""):
+        return 0.0, "Free tier"
+    api_sku = sku.capitalize()
+    items = _query_api("App Configuration", region, sku_name=api_sku)
+    item = _pick_item(items, meter_hint="Instance", unit_hint="Day")
+    if item:
+        monthly = item["retailPrice"] * 30
+        return monthly, f"API: ${item['retailPrice']:.2f}/day × 30 days"
+    return 0.0, f"No API result for tier '{sku}'"
+
+
+def _price_app_insights(_sku: str, region: str) -> tuple[float, str]:
+    """Application Insights – data-retention rate × assumed 5 GB."""
+    items = _query_api("Application Insights", region, sku_name="Enterprise")
+    item = _pick_item(items, meter_hint="Data Retention", unit_hint="GB/Month")
+    assumed_gb = 5
+    if item:
+        monthly = item["retailPrice"] * assumed_gb
+        return monthly, f"API: ${item['retailPrice']:.2f}/GB × {assumed_gb} GB"
+    return 0.0, "No API result"
+
+
+def _price_log_analytics(_sku: str, region: str) -> tuple[float, str]:
+    """Log Analytics (Azure Monitor) – ingestion rate × assumed 5 GB."""
+    items = _query_api("Azure Monitor", region, sku_name="Basic Logs")
+    item = _pick_item(items, meter_hint="Data Ingestion", unit_hint="GB")
+    assumed_gb = 5
+    if item:
+        monthly = item["retailPrice"] * assumed_gb
+        return monthly, f"API: ${item['retailPrice']:.2f}/GB × {assumed_gb} GB"
+    return 0.0, "No API result"
+
+
+def _price_role_assignment(_sku: str, _region: str) -> tuple[float, str]:
+    """Role assignments are free (management-plane RBAC)."""
+    return 0.0, "Free (RBAC)"
+
+
+# Registry: ARM resource type → pricing function
+_ESTIMATORS: dict[str, Any] = {
+    "Microsoft.Web/serverfarms": _price_app_service_plan,
+    "Microsoft.Web/sites": _price_web_site,
+    "Microsoft.Storage/storageAccounts": _price_storage,
+    "Microsoft.AppConfiguration/configurationStores": _price_app_config,
+    "Microsoft.Insights/components": _price_app_insights,
+    "Microsoft.OperationalInsights/workspaces": _price_log_analytics,
+    "Microsoft.Authorization/roleAssignments": _price_role_assignment,
+}
 
 
 # ─── Change-type labels ─────────────────────────────────────────────────────
@@ -157,28 +255,24 @@ def resolve_sku(change: dict[str, Any]) -> str:
     return "_default"
 
 
-def estimate_resource_cost(resource_type: str, sku: str, change_type: str, region: str = "eastus") -> float:
-    """Return estimated monthly cost delta for a single resource change.
+def estimate_resource_cost(
+    resource_type: str, sku: str, change_type: str, region: str = "eastus"
+) -> tuple[float, str]:
+    """Return (monthly_cost_delta, pricing_source) for a resource change.
 
-    Tries the Azure Retail Prices API first, falls back to static pricing.
+    All prices come from the Azure Retail Prices API.
     """
-    # Try live API lookup
-    service_name = RESOURCE_TYPE_TO_SERVICE.get(resource_type)
-    unit_cost = None
-    if service_name and sku != "_default":
-        unit_cost = get_azure_price(service_name, sku, region)
+    estimator = _ESTIMATORS.get(resource_type)
+    if not estimator:
+        return 0.0, "Unknown resource type"
 
-    # Fall back to static pricing
-    if unit_cost is None:
-        fallback = FALLBACK_PRICING.get(resource_type, {})
-        unit_cost = fallback.get(sku, fallback.get("_default", 0.0))
+    unit_cost, source = estimator(sku, region)
 
     if change_type == "Create":
-        return unit_cost
+        return unit_cost, source
     elif change_type == "Delete":
-        return -unit_cost
-    else:
-        return 0.0
+        return -unit_cost, source
+    return 0.0, source
 
 
 def build_report(changes: list[dict[str, Any]], threshold: float) -> tuple[str, float]:
@@ -194,7 +288,7 @@ def build_report(changes: list[dict[str, Any]], threshold: float) -> tuple[str, 
         name = resource_id.split("/")[-1] if "/" in resource_id else resource_id
 
         sku = resolve_sku(change)
-        cost = estimate_resource_cost(resource_type, sku, change_type)
+        cost, source = estimate_resource_cost(resource_type, sku, change_type)
         total_delta += cost
 
         rows.append({
@@ -203,21 +297,23 @@ def build_report(changes: list[dict[str, Any]], threshold: float) -> tuple[str, 
             "change": change_type,
             "sku": sku,
             "cost": cost,
+            "source": source,
         })
 
     # ── Build Markdown ───────────────────────────────────────────────────
     lines = [
         "## 💰 Infrastructure Cost Estimate",
         "",
-        "| Resource | Type | Change | SKU | Est. Monthly Cost |",
-        "|----------|------|--------|-----|------------------:|",
+        "| Resource | Type | Change | SKU | Est. Monthly Cost | Source |",
+        "|----------|------|--------|-----|------------------:|--------|",
     ]
 
     for r in rows:
         label = CHANGE_LABELS.get(r["change"], r["change"])
         cost_str = f"${r['cost']:,.2f}" if r["cost"] >= 0 else f"-${abs(r['cost']):,.2f}"
         lines.append(
-            f"| `{r['name']}` | `{r['type']}` | {label} | {r['sku']} | {cost_str} |"
+            f"| `{r['name']}` | `{r['type']}` | {label} | {r['sku']} "
+            f"| {cost_str} | {r['source']} |"
         )
 
     lines.append("")
@@ -245,8 +341,9 @@ def build_report(changes: list[dict[str, Any]], threshold: float) -> tuple[str, 
 
     lines.append("")
     lines.append("---")
-    lines.append("*Costs are estimates based on Azure retail pricing as of 2026-04. "
-                 "Actual costs may vary.*")
+    lines.append("*Costs are live estimates from the "
+                 "[Azure Retail Prices API](https://prices.azure.com). "
+                 "Actual costs may vary based on usage.*")
 
     return "\n".join(lines), total_delta
 
