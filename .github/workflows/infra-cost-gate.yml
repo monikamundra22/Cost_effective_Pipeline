@@ -122,14 +122,14 @@ jobs:
 
           # Validate the JSON has actual change data
           HAS_CHANGES=$(python3 -c "
-import json, sys
-try:
-    data = json.load(open('what-if-full.json'))
-    changes = data.get('properties', {}).get('changes', data.get('changes', []))
-    if isinstance(data, list): changes = data
-    print('yes' if changes else 'no')
-except: print('no')
-" 2>/dev/null)
+          import json, sys
+          try:
+              data = json.load(open('what-if-full.json'))
+              changes = data.get('properties', {}).get('changes', data.get('changes', []))
+              if isinstance(data, list): changes = data
+              print('yes' if changes else 'no')
+          except: print('no')
+          " 2>/dev/null)
 
           if [ "$HAS_CHANGES" != "yes" ]; then
             echo "⚠️ No valid what-if changes found, using sample data for cost estimation"
