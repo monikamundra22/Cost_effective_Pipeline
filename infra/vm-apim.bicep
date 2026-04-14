@@ -153,17 +153,9 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
     osProfile: {
       computerName: vmName
       adminUsername: adminUsername
-      adminPassword: isLinux ? null : adminPasswordOrKey
+      adminPassword: adminPasswordOrKey
       linuxConfiguration: isLinux ? {
-        disablePasswordAuthentication: true
-        ssh: {
-          publicKeys: [
-            {
-              path: '/home/${adminUsername}/.ssh/authorized_keys'
-              keyData: adminPasswordOrKey
-            }
-          ]
-        }
+        disablePasswordAuthentication: false
       } : null
     }
     storageProfile: {
