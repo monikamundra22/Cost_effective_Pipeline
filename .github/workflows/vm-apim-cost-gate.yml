@@ -84,9 +84,12 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   PYTHON_VERSION: "3.11"
+  AZURE_RESOURCE_GROUP: "rg-vm-apim-${{ github.run_id }}"
+  BICEP_TEMPLATE: "infra/vm-apim.bicep"
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
@@ -166,13 +169,51 @@ jobs:
           echo "| **Total Cost** | **\$${{ needs.estimate-costs.outputs.total_cost }}/mo** |" >> $GITHUB_STEP_SUMMARY
           echo "| **Threshold** | **\$${{ inputs.cost_threshold }}/mo** |" >> $GITHUB_STEP_SUMMARY
 
-      # Add your actual deployment steps below (Azure Login, az deployment, etc.)
-      - name: Deploy (placeholder)
+      - name: Login to Azure
+        uses: azure/login@v2
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create resource group
         run: |
-          echo "🚀 Deploying..."
-          echo "    VM:     ${{ inputs.vm_size }} (${{ inputs.vm_os }})"
-          echo "    APIM:   ${{ inputs.apim_sku }} (${{ inputs.apim_units }} units)"
-          echo "    Region: ${{ inputs.region }}"
+          az group create \
+            --name ${{ env.AZURE_RESOURCE_GROUP }} \
+            --location ${{ inputs.region }} \
+            --tags Purpose=CostPipeline
+
+      - name: Deploy VM & APIM
+        run: |
+          echo "🚀 Deploying VM (${{ inputs.vm_size }}) and APIM (${{ inputs.apim_sku }})..."
+
+          az deployment group create \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --template-file ${{ env.BICEP_TEMPLATE }} \
+            --parameters \
+              vmSize=${{ inputs.vm_size }} \
+              vmOs=${{ inputs.vm_os }} \
+              apimSku=${{ inputs.apim_sku }} \
+              apimUnits=${{ inputs.apim_units }} \
+              location=${{ inputs.region }} \
+              adminUsername=azureuser \
+              adminPasswordOrKey='${{ secrets.VM_ADMIN_PASSWORD_OR_KEY }}' \
+              apimPublisherEmail='${{ secrets.APIM_PUBLISHER_EMAIL }}' \
+              apimPublisherName='CostPipeline' \
+            --name "deploy-${{ github.run_number }}" \
+            --verbose
+
+          echo "✅ Deployment complete."
+
+      - name: Show deployment outputs
+        run: |
+          az deployment group show \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --name "deploy-${{ github.run_number }}" \
+            --query properties.outputs \
+            --output table
 
   # ──────────────────────────────────────────────────────────────────────────
   # 3. APPROVAL GATE – pauses for user approval when cost exceeds threshold
@@ -230,10 +271,48 @@ jobs:
           echo "| **Threshold** | **\$${{ inputs.cost_threshold }}/mo** |" >> $GITHUB_STEP_SUMMARY
           echo "| **Over by** | **+\$${{ needs.estimate-costs.outputs.cost_delta }}/mo** |" >> $GITHUB_STEP_SUMMARY
 
-      # Add your actual deployment steps below (Azure Login, az deployment, etc.)
-      - name: Deploy (placeholder)
+      - name: Login to Azure
+        uses: azure/login@v2
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create resource group
+        run: |
+          az group create \
+            --name ${{ env.AZURE_RESOURCE_GROUP }} \
+            --location ${{ inputs.region }} \
+            --tags Purpose=CostPipeline
+
+      - name: Deploy VM & APIM (approved overage)
         run: |
           echo "🚀 Deploying with approved overage (+\$${{ needs.estimate-costs.outputs.cost_delta }}/mo)..."
-          echo "    VM:     ${{ inputs.vm_size }} (${{ inputs.vm_os }})"
-          echo "    APIM:   ${{ inputs.apim_sku }} (${{ inputs.apim_units }} units)"
-          echo "    Region: ${{ inputs.region }}"
+
+          az deployment group create \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --template-file ${{ env.BICEP_TEMPLATE }} \
+            --parameters \
+              vmSize=${{ inputs.vm_size }} \
+              vmOs=${{ inputs.vm_os }} \
+              apimSku=${{ inputs.apim_sku }} \
+              apimUnits=${{ inputs.apim_units }} \
+              location=${{ inputs.region }} \
+              adminUsername=azureuser \
+              adminPasswordOrKey='${{ secrets.VM_ADMIN_PASSWORD_OR_KEY }}' \
+              apimPublisherEmail='${{ secrets.APIM_PUBLISHER_EMAIL }}' \
+              apimPublisherName='CostPipeline' \
+            --name "deploy-${{ github.run_number }}" \
+            --verbose
+
+          echo "✅ Deployment complete."
+
+      - name: Show deployment outputs
+        run: |
+          az deployment group show \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --name "deploy-${{ github.run_number }}" \
+            --query properties.outputs \
+            --output table
