@@ -275,26 +275,20 @@ def build_report(
         "",
     ]
 
-    if threshold > 0:
-        if total > threshold:
-            lines.append(
-                f"> ⛔ **BLOCKED** – Estimated cost (${total:,.2f}) "
-                f"exceeds threshold (${threshold:,.2f}). "
-                f"Deployment will not proceed."
-            )
-        else:
-            lines.append(
-                f"> ✅ Estimated cost (${total:,.2f}) is within the "
-                f"threshold (${threshold:,.2f})."
-            )
-    elif threshold == 0:
-        if total > 0:
-            lines.append(
-                f"> ⛔ **BLOCKED** – Threshold is $0.00 (zero tolerance). "
-                f"Estimated cost (${total:,.2f}) exceeds threshold."
-            )
-        else:
-            lines.append("> ✅ No cost detected.")
+    exceeded = (threshold == 0 and total > 0) or (threshold > 0 and total > threshold)
+    delta = total - threshold if exceeded else 0.0
+
+    if exceeded:
+        lines.append(
+            f"> ⚠️ **APPROVAL REQUIRED** – Estimated cost (${total:,.2f}) "
+            f"exceeds threshold (${threshold:,.2f}) by **${delta:,.2f}**. "
+            f"Manual approval is needed to proceed with deployment."
+        )
+    else:
+        lines.append(
+            f"> ✅ Estimated cost (${total:,.2f}) is within the "
+            f"threshold (${threshold:,.2f})."
+        )
 
     # Detail breakdown
     lines.extend([
@@ -376,25 +370,26 @@ def main() -> None:
         with open(summary_file, "a", encoding="utf-8") as fh:
             fh.write(report + "\n")
 
+    # Determine if cost exceeds threshold
+    exceeded = (args.threshold == 0 and total > 0) or (args.threshold > 0 and total > args.threshold)
+    delta = total - args.threshold if exceeded else 0.0
+
     # Export values for downstream steps
     output_file = os.environ.get("GITHUB_OUTPUT")
     if output_file:
         with open(output_file, "a", encoding="utf-8") as fh:
             fh.write(f"total_cost={total:.2f}\n")
-            blocked = "true" if (args.threshold == 0 and total > 0) or (args.threshold > 0 and total > args.threshold) else "false"
-            fh.write(f"cost_exceeded={blocked}\n")
+            fh.write(f"cost_exceeded={'true' if exceeded else 'false'}\n")
+            fh.write(f"cost_delta={delta:.2f}\n")
             fh.write(f"vm_cost={vm_cost:.2f}\n")
             fh.write(f"apim_cost={apim_cost:.2f}\n")
 
-    # Exit with failure if over threshold
-    if args.threshold == 0 and total > 0:
-        print(f"\n⛔ Threshold is $0 (zero tolerance). Deployment blocked. Cost: ${total:,.2f}")
-        sys.exit(1)
-    if args.threshold > 0 and total > args.threshold:
-        print(f"\n⛔ Cost threshold exceeded! ${total:,.2f} > ${args.threshold:,.2f}")
-        sys.exit(1)
-
-    print("\n✅ Cost check passed.")
+    if exceeded:
+        print(f"\n⚠️  Cost threshold exceeded by ${delta:,.2f}!")
+        print(f"   Total: ${total:,.2f} | Threshold: ${args.threshold:,.2f} | Delta: +${delta:,.2f}")
+        print("   Deployment will require manual approval.")
+    else:
+        print("\n✅ Cost check passed.")
 
 
 if __name__ == "__main__":

@@ -99,6 +99,7 @@ jobs:
     outputs:
       total_cost: ${{ steps.cost.outputs.total_cost }}
       cost_exceeded: ${{ steps.cost.outputs.cost_exceeded }}
+      cost_delta: ${{ steps.cost.outputs.cost_delta }}
       vm_cost: ${{ steps.cost.outputs.vm_cost }}
       apim_cost: ${{ steps.cost.outputs.apim_cost }}
 
@@ -138,14 +139,14 @@ jobs:
           path: vm-apim-cost-report.md
 
   # ──────────────────────────────────────────────────────────────────────────
-  # 2. DEPLOY – only runs when cost check passes
+  # 2. DEPLOY – auto-deploys when cost is within threshold
   # ──────────────────────────────────────────────────────────────────────────
   deploy:
     name: "Deploy VM & APIM"
     needs: estimate-costs
     if: |
-      always() &&
-      needs.estimate-costs.result == 'success'
+      needs.estimate-costs.result == 'success' &&
+      needs.estimate-costs.outputs.cost_exceeded != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -156,7 +157,7 @@ jobs:
 
       - name: Cost gate passed
         run: |
-          echo "✅ Cost check passed!"
+          echo "✅ Cost check passed – within threshold!"
           echo "   VM cost:   $${{ needs.estimate-costs.outputs.vm_cost }}"
           echo "   APIM cost: $${{ needs.estimate-costs.outputs.apim_cost }}"
           echo "   Total:     $${{ needs.estimate-costs.outputs.total_cost }}"
@@ -170,3 +171,60 @@ jobs:
           echo "    VM:   ${{ inputs.vm_size }} (${{ inputs.vm_os }})"
           echo "    APIM: ${{ inputs.apim_sku }} (${{ inputs.apim_units }} units)"
           echo "    Region: ${{ inputs.region }}"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3. APPROVAL GATE – requires manual approval when cost exceeds threshold
+  # ──────────────────────────────────────────────────────────────────────────
+  approval-gate:
+    name: "⚠️ Cost Exceeded – Approval Required"
+    needs: estimate-costs
+    if: |
+      needs.estimate-costs.result == 'success' &&
+      needs.estimate-costs.outputs.cost_exceeded == 'true'
+    runs-on: ubuntu-latest
+    environment: cost-approval
+
+    steps:
+      - name: Show cost overage details
+        run: |
+          echo "## ⚠️ Cost Threshold Exceeded – Approval Granted" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------:|" >> $GITHUB_STEP_SUMMARY
+          echo "| VM (${{ inputs.vm_size }}) | \$${{ needs.estimate-costs.outputs.vm_cost }}/mo |" >> $GITHUB_STEP_SUMMARY
+          echo "| APIM (${{ inputs.apim_sku }}) | \$${{ needs.estimate-costs.outputs.apim_cost }}/mo |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total Cost** | **\$${{ needs.estimate-costs.outputs.total_cost }}/mo** |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Threshold** | **\$${{ inputs.cost_threshold }}/mo** |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Over by** | **+\$${{ needs.estimate-costs.outputs.cost_delta }}/mo** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> A reviewer has approved this cost overage." >> $GITHUB_STEP_SUMMARY
+
+          echo "⚠️  Cost exceeds threshold by \$${{ needs.estimate-costs.outputs.cost_delta }}/month"
+          echo "   Total: \$${{ needs.estimate-costs.outputs.total_cost }} > Threshold: \$${{ inputs.cost_threshold }}"
+          echo "✅ Approval granted – proceeding to deployment."
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 4. DEPLOY AFTER APPROVAL – runs after manual approval is granted
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy-after-approval:
+    name: "Deploy VM & APIM (Approved)"
+    needs: [estimate-costs, approval-gate]
+    if: |
+      needs.approval-gate.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Deploy with approved overage
+        run: |
+          echo "✅ Deploying with approved cost overage (+\$${{ needs.estimate-costs.outputs.cost_delta }}/mo)"
+          echo "   VM:     ${{ inputs.vm_size }} (${{ inputs.vm_os }})"
+          echo "   APIM:   ${{ inputs.apim_sku }} (${{ inputs.apim_units }} units)"
+          echo "   Region: ${{ inputs.region }}"
+          echo "   Total:  \$${{ needs.estimate-costs.outputs.total_cost }}/mo"
+          echo ""
+          echo "ℹ️  Add your azure/login and az deployment steps here."
